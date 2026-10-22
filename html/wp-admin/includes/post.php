@@ -23,6 +23,20 @@ function _wp_translate_postdata( $update = false, $post_data = null ) {
 		$post_data = &$_POST;
 	}
 
+	/*
+	 * A raw `ID` on the create path (no `post_ID`) is an attempt to overwrite an
+	 * existing post while bypassing the per-post capability checks below, which only
+	 * run on the update path. Reject it outright: legitimate post creation never
+	 * carries an `ID`.
+	 */
+	if ( ! $update && ! empty( $post_data['ID'] ) ) {
+		if ( 'page' === $post_data['post_type'] ) {
+			return new WP_Error( 'edit_others_pages', __( 'Sorry, you are not allowed to edit pages as this user.' ) );
+		} else {
+			return new WP_Error( 'edit_others_posts', __( 'Sorry, you are not allowed to edit posts as this user.' ) );
+		}
+	}
+
 	if ( $update ) {
 		$post_data['ID'] = (int) $post_data['post_ID'];
 	}
@@ -1253,7 +1267,7 @@ function wp_edit_attachments_query_vars( $q = false ) {
 
 	// Filter query clauses to include filenames.
 	if ( isset( $q['s'] ) ) {
-		add_filter( 'posts_clauses', '_filter_query_attachment_filenames' );
+		add_filter( 'wp_allow_query_attachment_by_filename', '__return_true' );
 	}
 
 	return $q;

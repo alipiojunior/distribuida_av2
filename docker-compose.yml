@@ -64,6 +64,19 @@ services:
     networks:
       - frontend
 
+  locust:
+    image: grubykarol/locust
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./locust-scripts:/locust
+    environment:
+      - ATTACKED_HOST=http://nginx
+    networks:
+      - frontend
+    depends_on:
+      - nginx
+
 networks:
   frontend:
   backend:

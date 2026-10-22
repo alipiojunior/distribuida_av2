@@ -442,6 +442,13 @@ class WP_Query {
 	public $thumbnails_cached = false;
 
 	/**
+	 * Controls whether an attachment query should include filenames or not.
+	 *
+	 * @since 6.0.3
+	 * @var bool
+	 */
+	protected $allow_query_attachment_by_filename = false;
+	/**
 	 * Cached list of search stopwords.
 	 *
 	 * @since 3.7.0
@@ -1388,8 +1395,13 @@ class WP_Query {
 				$q['search_orderby_title'][] = $wpdb->prepare( "{$wpdb->posts}.post_title LIKE %s", $like );
 			}
 
-			$like      = $n . $wpdb->esc_like( $term ) . $n;
-			$search   .= $wpdb->prepare( "{$searchand}(({$wpdb->posts}.post_title $like_op %s) $andor_op ({$wpdb->posts}.post_excerpt $like_op %s) $andor_op ({$wpdb->posts}.post_content $like_op %s))", $like, $like, $like );
+			$like = $n . $wpdb->esc_like( $term ) . $n;
+
+			if ( ! empty( $this->allow_query_attachment_by_filename ) ) {
+				$search .= $wpdb->prepare( "{$searchand}(({$wpdb->posts}.post_title $like_op %s) $andor_op ({$wpdb->posts}.post_excerpt $like_op %s) $andor_op ({$wpdb->posts}.post_content $like_op %s) $andor_op (sq1.meta_value $like_op %s))", $like, $like, $like, $like );
+			} else {
+				$search .= $wpdb->prepare( "{$searchand}(({$wpdb->posts}.post_title $like_op %s) $andor_op ({$wpdb->posts}.post_excerpt $like_op %s) $andor_op ({$wpdb->posts}.post_content $like_op %s))", $like, $like, $like );
+			}
 			$searchand = ' AND ';
 		}
 
@@ -1772,6 +1784,16 @@ class WP_Query {
 
 		// Fill again in case 'pre_get_posts' unset some vars.
 		$q = $this->fill_query_vars( $q );
+
+		/**
+		 * Filters whether an attachment query should include filenames or not.
+		 *
+		 * @since 6.0.3
+		 *
+		 * @param bool $allow_query_attachment_by_filename Whether or not to include filenames.
+		 */
+		$this->allow_query_attachment_by_filename = apply_filters( 'wp_allow_query_attachment_by_filename', false );
+		remove_all_filters( 'wp_allow_query_attachment_by_filename' );
 
 		// Parse meta query.
 		$this->meta_query = new WP_Meta_Query();
@@ -2204,7 +2226,7 @@ class WP_Query {
 			}
 		}
 
-		if ( ! empty( $this->tax_query->queries ) || ! empty( $this->meta_query->queries ) ) {
+		if ( ! empty( $this->tax_query->queries ) || ! empty( $this->meta_query->queries ) || ! empty( $this->allow_query_attachment_by_filename ) ) {
 			$groupby = "{$wpdb->posts}.ID";
 		}
 
@@ -2280,6 +2302,10 @@ class WP_Query {
 			$whichmimetype = wp_post_mime_type_where( $q['post_mime_type'], $wpdb->posts );
 		}
 		$where .= $search . $whichauthor . $whichmimetype;
+
+		if ( ! empty( $this->allow_query_attachment_by_filename ) ) {
+			$join .= " LEFT JOIN {$wpdb->postmeta} AS sq1 ON ( {$wpdb->posts}.ID = sq1.post_id AND sq1.meta_key = '_wp_attached_file' )";
+		}
 
 		if ( ! empty( $this->meta_query->queries ) ) {
 			$clauses = $this->meta_query->get_sql( 'post', $wpdb->posts, 'ID', $this );
@@ -3034,31 +3060,6 @@ class WP_Query {
 			$this->posts = apply_filters_ref_array( 'posts_results', array( $this->posts, &$this ) );
 		}
 
-		if ( ! empty( $this->posts ) && $this->is_comment_feed && $this->is_singular ) {
-			/** This filter is documented in wp-includes/query.php */
-			$cjoin = apply_filters_ref_array( 'comment_feed_join', array( '', &$this ) );
-
-			/** This filter is documented in wp-includes/query.php */
-			$cwhere = apply_filters_ref_array( 'comment_feed_where', array( "WHERE comment_post_ID = '{$this->posts[0]->ID}' AND comment_approved = '1'", &$this ) );
-
-			/** This filter is documented in wp-includes/query.php */
-			$cgroupby = apply_filters_ref_array( 'comment_feed_groupby', array( '', &$this ) );
-			$cgroupby = ( ! empty( $cgroupby ) ) ? 'GROUP BY ' . $cgroupby : '';
-
-			/** This filter is documented in wp-includes/query.php */
-			$corderby = apply_filters_ref_array( 'comment_feed_orderby', array( 'comment_date_gmt DESC', &$this ) );
-			$corderby = ( ! empty( $corderby ) ) ? 'ORDER BY ' . $corderby : '';
-
-			/** This filter is documented in wp-includes/query.php */
-			$climits = apply_filters_ref_array( 'comment_feed_limits', array( 'LIMIT ' . get_option( 'posts_per_rss' ), &$this ) );
-
-			$comments_request = "SELECT {$wpdb->comments}.* FROM {$wpdb->comments} $cjoin $cwhere $cgroupby $corderby $climits";
-			$comments         = $wpdb->get_results( $comments_request );
-			// Convert to WP_Comment.
-			$this->comments      = array_map( 'get_comment', $comments );
-			$this->comment_count = count( $this->comments );
-		}
-
 		// Check post status to determine if post should be displayed.
 		if ( ! empty( $this->posts ) && ( $this->is_single || $this->is_page ) ) {
 			$status = get_post_status( $this->posts[0] );
@@ -3115,6 +3116,31 @@ class WP_Query {
 				 */
 				$this->posts[0] = get_post( apply_filters_ref_array( 'the_preview', array( $this->posts[0], &$this ) ) );
 			}
+		}
+
+		if ( ! empty( $this->posts ) && $this->is_comment_feed && $this->is_singular ) {
+			/** This filter is documented in wp-includes/query.php */
+			$cjoin = apply_filters_ref_array( 'comment_feed_join', array( '', &$this ) );
+
+			/** This filter is documented in wp-includes/query.php */
+			$cwhere = apply_filters_ref_array( 'comment_feed_where', array( "WHERE comment_post_ID = '{$this->posts[0]->ID}' AND comment_approved = '1'", &$this ) );
+
+			/** This filter is documented in wp-includes/query.php */
+			$cgroupby = apply_filters_ref_array( 'comment_feed_groupby', array( '', &$this ) );
+			$cgroupby = ( ! empty( $cgroupby ) ) ? 'GROUP BY ' . $cgroupby : '';
+
+			/** This filter is documented in wp-includes/query.php */
+			$corderby = apply_filters_ref_array( 'comment_feed_orderby', array( 'comment_date_gmt DESC', &$this ) );
+			$corderby = ( ! empty( $corderby ) ) ? 'ORDER BY ' . $corderby : '';
+
+			/** This filter is documented in wp-includes/query.php */
+			$climits = apply_filters_ref_array( 'comment_feed_limits', array( 'LIMIT ' . get_option( 'posts_per_rss' ), &$this ) );
+
+			$comments_request = "SELECT {$wpdb->comments}.* FROM {$wpdb->comments} $cjoin $cwhere $cgroupby $corderby $climits";
+			$comments         = $wpdb->get_results( $comments_request );
+			// Convert to WP_Comment.
+			$this->comments      = array_map( 'get_comment', $comments );
+			$this->comment_count = count( $this->comments );
 		}
 
 		// Put sticky posts at the top of the posts array.
